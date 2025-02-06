@@ -1,0 +1,195 @@
+-- Services
+local player = game.Players.LocalPlayer
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local userInputService = game:GetService("UserInputService")
+local dataStoreService = game:GetService("DataStoreService")
+local settingsDataStore = dataStoreService:GetDataStore("GameSettings") -- Change name if needed
+
+-- Game Events (Adjust if needed)
+local towerPlacementEvent = replicatedStorage:WaitForChild("PlaceTower")
+local upgradeTowerEvent = replicatedStorage:WaitForChild("UpgradeTower")
+local sellTowerEvent = replicatedStorage:WaitForChild("SellTower")
+local waveSkipEvent = replicatedStorage:WaitForChild("SkipWave")
+local playAgainEvent = replicatedStorage:WaitForChild("PlayAgain")
+local enemiesFolder = workspace:WaitForChild("Enemies")
+local gameStats = replicatedStorage:WaitForChild("GameStats")
+local cashResource = player:FindFirstChild("Cash")
+
+-- Default Settings (Loaded from DataStore later)
+local settings = {
+    autoPlace = false,
+    autoUpgrade = false,
+    autoSkipWave = false,
+    autoSell = false,
+    autoPlayAgain = false,
+    selectedUnit = "Unit1"
+}
+
+local availableUnits = {"Unit1", "Unit2", "Unit3"} -- Change these based on your game
+
+-- Load Settings from DataStore
+local function loadSettings()
+    local success, savedSettings = pcall(function()
+        return settingsDataStore:GetAsync(player.UserId)
+    end)
+
+    if success and savedSettings then
+        for key, value in pairs(savedSettings) do
+            if settings[key] ~= nil then
+                settings[key] = value
+            end
+        end
+    end
+end
+
+-- Save Settings to DataStore
+local function saveSettings()
+    local success, errorMessage = pcall(function()
+        settingsDataStore:SetAsync(player.UserId, settings)
+    end)
+    
+    if not success then
+        warn("Failed to save settings: " .. errorMessage)
+    end
+end
+
+-- Load settings when the player joins
+loadSettings()
+
+-- UI Setup
+local screenGui = Instance.new("ScreenGui", player.PlayerGui)
+local frame = Instance.new("Frame", screenGui)
+frame.Size = UDim2.new(0, 200, 0, 350)
+frame.Position = UDim2.new(0, 10, 0, 10)
+frame.BackgroundColor3 = Color3.new(0, 0, 0)
+frame.Visible = false
+
+local function createButton(name, position, settingKey)
+    local button = Instance.new("TextButton", frame)
+    button.Size = UDim2.new(0, 180, 0, 30)
+    button.Position = UDim2.new(0, 10, 0, position)
+    button.Text = name .. ": " .. (settings[settingKey] and "ON" or "OFF")
+    button.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+
+    button.MouseButton1Click:Connect(function()
+        settings[settingKey] = not settings[settingKey]
+        button.Text = name .. ": " .. (settings[settingKey] and "ON" or "OFF")
+        saveSettings() -- Save after each change
+        print(name .. " set to:", settings[settingKey])
+    end)
+end
+
+-- Function to create a dropdown for unit selection
+local function createDropdown(position)
+    local dropdown = Instance.new("TextButton", frame)
+    dropdown.Size = UDim2.new(0, 180, 0, 30)
+    dropdown.Position = UDim2.new(0, 10, 0, position)
+    dropdown.Text = "Unit: " .. settings.selectedUnit
+    dropdown.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+
+    dropdown.MouseButton1Click:Connect(function()
+        local currentIndex = table.find(availableUnits, settings.selectedUnit) or 1
+        local nextIndex = (currentIndex % #availableUnits) + 1
+        settings.selectedUnit = availableUnits[nextIndex]
+        dropdown.Text = "Unit: " .. settings.selectedUnit
+        saveSettings() -- Save after each change
+        print("Unit changed to:", settings.selectedUnit)
+    end)
+end
+
+-- Creating UI buttons
+createButton("Auto Place", 10, "autoPlace")
+createButton("Auto Upgrade", 50, "autoUpgrade")
+createButton("Auto Skip Wave", 90, "autoSkipWave")
+createButton("Auto Sell", 130, "autoSell")
+createButton("Auto Play Again", 170, "autoPlayAgain")
+createDropdown(210) -- Unit selection dropdown
+
+-- Toggle UI with "P" key
+userInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.P then
+        frame.Visible = not frame.Visible
+    end
+end)
+
+-- Functions for automation
+local function placeUnits()
+    local unitCost = 500
+    local positions = {Vector3.new(10, 0, 10), Vector3.new(15, 0, 15), Vector3.new(20, 0, 20)}
+
+    while settings.autoPlace do
+        for _, pos in ipairs(positions) do
+            if cashResource.Value >= unitCost then
+                towerPlacementEvent:FireServer(settings.selectedUnit, pos)
+                print("Placed unit:", settings.selectedUnit, "at", pos)
+            end
+        end
+        wait(1)
+    end
+end
+
+local function upgradeUnits()
+    local upgradeCost = 300
+    local minCashToSave = 200
+
+    while settings.autoUpgrade do
+        for _, tower in pairs(player.OwnedTowers:GetChildren()) do
+            if cashResource.Value >= upgradeCost + minCashToSave then
+                upgradeTowerEvent:FireServer(tower)
+                print("Upgraded unit:", tower)
+            end
+        end
+        wait(5)
+    end
+end
+
+local function skipWave()
+    local maxEnemiesForSkip = 5
+
+    while settings.autoSkipWave do
+        local enemyCount = #enemiesFolder:GetChildren()
+        if enemyCount <= maxEnemiesForSkip then
+            waveSkipEvent:FireServer()
+            print("Skipped wave (Enemies Left:", enemyCount, ")")
+        end
+        wait(10)
+    end
+end
+
+local function autoSellUnits()
+    local autoSellWave = 30
+
+    while settings.autoSell do
+        local currentWave = gameStats:FindFirstChild("CurrentWave")
+        if currentWave and currentWave.Value >= autoSellWave then
+            for _, tower in pairs(player.OwnedTowers:GetChildren()) do
+                sellTowerEvent:FireServer(tower)
+                print("Sold unit:", tower)
+            end
+        end
+        wait(5)
+    end
+end
+
+local function autoPlayAgain()
+    while settings.autoPlayAgain do
+        local gameOver = gameStats:FindFirstChild("GameOver")
+        if gameOver and gameOver.Value == true then
+            playAgainEvent:FireServer()
+            print("Game ended. Restarting match...")
+        end
+        wait(10)
+    end
+end
+
+-- Start functions based on settings
+spawn(function()
+    while true do
+        if settings.autoPlace then spawn(placeUnits) end
+        if settings.autoUpgrade then spawn(upgradeUnits) end
+        if settings.autoSkipWave then spawn(skipWave) end
+        if settings.autoSell then spawn(autoSellUnits) end
+        if settings.autoPlayAgain then spawn(autoPlayAgain) end
+        wait(1)
+    end
+end)
